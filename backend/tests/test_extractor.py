@@ -204,6 +204,84 @@ def test_multiple_objections_without_final_decision_remain_unresolved():
     assert result[0].history == []
 
 
+def test_criticism_without_explicit_rejection_remains_unresolved():
+    criticism = "Redis may be too complex for this service and could increase maintenance."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use Redis", "status": "rejected", "outcome_basis": "explicit_rejection",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": criticism,
+                              "supports_claim": True}],
+    }])])).extract([msg(1, criticism)])
+
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].outcome_evidence == []
+    assert result[0].history == []
+
+
+def test_unsupported_explicit_outcome_is_downgraded():
+    quote = "The team accepts PostgreSQL."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use PostgreSQL", "status": "accepted",
+        "outcome_basis": "explicit_acceptance",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": quote,
+                              "supports_claim": False}],
+    }])])).extract([msg(1, quote)])
+
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].outcome_evidence == []
+
+
+def test_exact_duplicate_evidence_is_deduplicated():
+    quote = "The team accepts PostgreSQL."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use PostgreSQL", "status": "accepted",
+        "outcome_basis": "explicit_acceptance",
+        "evidence": [
+            {"segment_id": "message_1", "quote": quote},
+            {"segment_id": "message_1", "quote": quote},
+        ],
+        "outcome_evidence": [
+            {"segment_id": "message_1", "quote": quote, "supports_claim": True},
+            {"segment_id": "message_1", "quote": quote, "supports_claim": True},
+        ],
+    }])])).extract([msg(1, quote)])
+
+    assert len(result[0].evidence) == 1
+    assert len(result[0].outcome_evidence) == 1
+
+
+def test_contained_outcome_excerpt_is_reduced_to_the_full_quote():
+    full = "The team accepts PostgreSQL for the production database."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use PostgreSQL", "status": "accepted",
+        "outcome_basis": "explicit_acceptance",
+        "outcome_evidence": [
+            {"segment_id": "message_1", "quote": "accepts PostgreSQL", "supports_claim": True},
+            {"segment_id": "message_1", "quote": full, "supports_claim": True},
+        ],
+    }])])).extract([msg(1, full)])
+
+    assert [e.quote for e in result[0].outcome_evidence] == [full]
+
+
+def test_rejection_reason_without_present_supporting_quote_is_not_stored():
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use SQLite", "status": "rejected",
+        "outcome_basis": "explicit_rejection",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": "We reject SQLite",
+                              "supports_claim": True}],
+        "rejection_reasons": [{"text": "poor replication", "evidence": [
+            {"segment_id": "message_1", "quote": "invented supporting quote",
+             "supports_claim": True},
+        ]}],
+    }])])).extract([msg(1, "We reject SQLite")])
+
+    assert result[0].status == "rejected"
+    assert result[0].rejection_reasons == []
+    assert result[0].reason is None
+
+
 def test_denial_of_consensus_does_not_create_project_outcome():
     quote = "There is no consensus to reject the proposal."
     result = DecisionExtractor(MockProvider([response([{
