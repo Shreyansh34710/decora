@@ -2,7 +2,7 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
-DecisionStatus = Literal["accepted", "rejected", "unresolved", "contested"]
+DecisionStatus = Literal["accepted", "rejected", "unresolved"]
 OutcomeBasis = Literal[
     "explicit_acceptance", "explicit_rejection", "consensus",
     "individual_opinion", "unresolved", "unknown"
@@ -15,6 +15,13 @@ class Evidence(BaseModel):
     author: Optional[str] = None
     timestamp: Optional[str] = None
     source_url: Optional[str] = None
+    quote_verified: bool = False
+    supports_claim: Optional[bool] = None
+
+
+class RejectionReason(BaseModel):
+    text: str
+    evidence: List[Evidence] = Field(default_factory=list)
 
 
 class Alternative(BaseModel):
@@ -24,12 +31,15 @@ class Alternative(BaseModel):
     reason: Optional[str] = None
     outcome_basis: OutcomeBasis = "unknown"
     evidence: List[Evidence] = Field(default_factory=list)
+    outcome_evidence: List[Evidence] = Field(default_factory=list)
+    rejection_reasons: List[RejectionReason] = Field(default_factory=list)
+    history: List[dict] = Field(default_factory=list)
     verified: bool = False
 
 
 class DiscussionMessage(BaseModel):
     message_id: str
-    author: str = "Unknown"
+    author: Optional[str] = None
     timestamp: Optional[str] = None
     content: str
     source_url: Optional[str] = None
