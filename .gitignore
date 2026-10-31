@@ -5,6 +5,10 @@ __pycache__/
 venv/
 .pytest_cache/
 .coverage
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
 
 # Environment variables
 .env

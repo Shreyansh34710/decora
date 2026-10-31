@@ -1,0 +1,9 @@
+Alice: I propose using MongoDB for our application.
+
+Bob: I disagree because our data has complex relational dependencies.
+
+Charlie: PostgreSQL would be a better choice for maintaining relational consistency.
+
+Alice: After considering the discussion, I agree that PostgreSQL is the better option.
+
+Bob: We should reject MongoDB for this project because our data relationships require relational consistency.

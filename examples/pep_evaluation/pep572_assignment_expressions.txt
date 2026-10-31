@@ -1,0 +1,13 @@
+Guido van Rossum: As anticippated, after a final round of feedback I am hereby accepting PEP 572, Assignment Expressions. Thanks to everyone who participated in the discussion or sent a PR. Now on to the implementation work!
+
+ZHUO QL (KDr2): Hooray! I could be a happy Python oneliner now! Greetings.
+
+Chris Jerdonek: (status := "Accepted") and "Congratulations!" ;-) (hope I did that right, but I can't try it yet!) Thanks for hanging in there, Guido, and for your patience with everyone during the discussions. I'm glad you're still with us!
+
+Random832: I know everyone else is probably sick of discussing this (I somehow completely missed the discussion until it was almost done) but I have a question... Why does this not allow assignment to attributes and subscripts? I think this is, at least, surprising enough that there should be a rationale section explaining it. As it is, it's barely even explicitly stated, other than the use of 'NAME' in a few places and an offhand mention that the assignment statement can assign to attributes and subscripts.
+
+Chris Angelico: It was discussed at some length, yes. Assignment to arbitrary targets would also mean permitting iterable unpacking, which is not desired ("x, y := 3, 4"??), and there weren't enough use-cases for attribute/item assignment to justify creating a rule of "you can assign to any single target, but can't unpack". In the future, if such use-cases are found, the grammar can be expanded.
+
+Guido van Rossum: Also nobody had a use case.
+
+Nick Coghlan: It's in the same category as disallowing assignment to attributes and subscripts in other name binding operations like "def" and "class" statements: there isn't a technical limitation preventing it, there's a design decision that we currently believe allowing it would reduce code clarity rather than increase it. It's also the case that unlike local name bindings, assigning to attributes and subscripts as an expression can already be formulated as a helper function with side effects.

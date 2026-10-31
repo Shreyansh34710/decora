@@ -2,7 +2,7 @@
 
 ## Team Information
 
-- **Team Name:** [AstraNova]
+- **Team Name:** AstraNova
 - **Team Members:**
   - Shreyansh Mishra
   - Irfan Rahaman
@@ -38,17 +38,19 @@ It will analyse project discussions, identify the decisions made during them, an
 
 ## AI Models and Their Role
 
-We plan to use an organizer-approved open-weight language model as the primary model for Decora.
+**Product inference model:** Qwen3:8b, run locally through Ollama.
 
-It will be responsible for understanding technical discussions, extracting decisions, distinguishing accepted and rejected proposals, and recovering the reasoning behind them.
+Qwen3:8b is responsible for understanding technical discussions, extracting decisions, distinguishing accepted and rejected proposals, and recovering the reasoning behind them. Decora uses this local open-weight model for product inference.
 
-**Model selection:** [Add the exact approved model name once confirmed.]
+**Reason for selection:** A local open-weight model keeps the main intelligence tasks independent of proprietary inference APIs and aligned with the hackathon's open-source AI requirements.
 
-**Reason for selection:** We want to use an open-weight model for the main intelligence tasks rather than depending on proprietary APIs. This also allows us to keep the core system aligned with the hackathon's open-source AI requirements.
+## AI-Assisted Development Disclosure
+
+The Phase 2 implementation was assisted by OpenAI Codex using GPT-5. This coding assistant was used during development only. GPT-5 is not used for Decora product inference.
 
 ## OpenAI API Usage
 
-We do not currently plan to use the OpenAI API for the core application. Our priority is to make the approved open-weight model responsible for the main AI functionality.
+Decora does not use the OpenAI API for product inference. Product inference runs locally through Ollama using Qwen3:8b.
 
 ## Our Focus
 
