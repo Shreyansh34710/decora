@@ -16,7 +16,10 @@ class Evidence(BaseModel):
     timestamp: Optional[str] = None
     source_url: Optional[str] = None
     quote_verified: bool = False
-    supports_claim: Optional[bool] = None
+    supports_claim: Optional[bool] = Field(
+        default=None,
+        description="Model assessment only; None means unknown. Quote verification does not verify logical support.",
+    )
 
 
 class RejectionReason(BaseModel):

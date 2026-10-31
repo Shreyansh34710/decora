@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from app.ai.ollama_provider import OllamaProvider
 from app.core.schemas import Alternative, DiscussionMessage, Evidence, RejectionReason
 from app.services.chunker import create_chunks
-from app.services.evidence import verify_evidence
+from app.services.evidence import normalize_support_assessment, verify_evidence
 
 
 class DecisionExtractor:
@@ -52,8 +52,8 @@ class DecisionExtractor:
                 "status": "accepted|rejected|unresolved",
                 "outcome_basis": "explicit_acceptance|explicit_rejection|consensus|individual_opinion|unresolved|unknown",
                 "outcome_evidence": [{"segment_id": "...", "quote": "exact substring", "supports_claim": True}],
-                "rejection_reasons": [{"text": "stated reason, or omit if none", "evidence": [{"segment_id": "...", "quote": "exact substring", "supports_claim": True}]}],
-                "history": [{"segment_id": "...", "status": "...", "outcome_basis": "..."}]
+                "evidence": [{"segment_id": "...", "quote": "other relevant discussion text", "supports_claim": None}],
+                "rejection_reasons": [{"text": "one distinct stated reason", "evidence": [{"segment_id": "...", "quote": "exact substring", "supports_claim": True}]}]
             }]
         }
         return ("You recover engineering proposals and decisions from a raw technical discussion. "
@@ -63,22 +63,32 @@ class DecisionExtractor:
                 "A proposal mentioned in a later message may refer to one much earlier; match only "
                 "when evidence makes identity clear. An individual's view is not project acceptance "
                 "or rejection. Classify it as individual_opinion with status unresolved unless the "
-                "discussion establishes a project outcome. Silence is never an outcome. Preserve "
+                "discussion establishes a project outcome. For explicit_rejection, cite a clear "
+                "project-level rejection statement, not an objection, question, recommendation, "
+                "lack of support, or silence. Multiple objections without a final decision remain "
+                "unresolved. Silence is never an outcome. Preserve "
                 "conflicting positions and use unresolved when there is no final resolution. "
-                "Separate outcome_evidence from rejection reason evidence. Give every stated "
-                "rejection reason separately; if none is stated, return an empty reason list. "
+                "Keep outcome evidence separate from general discussion evidence. Extract every "
+                "distinct stated rejection reason as its own item with its own exact supporting "
+                "quote; do not combine different reasons into a vague summary. Include concerns "
+                "such as consequences explicitly stated in the discussion. If no reason is "
+                "supported by a quote, return an empty rejection_reasons list. "
                 "Never invent reasons, authors, timestamps, URLs, message IDs, or quotes. Quote exact "
-                "substrings and mark supports_claim true only when the quote logically supports the "
-                "specific claim; quote presence will be independently checked. Include metadata "
-                "only as present in source messages. Include every proposal that should be in the "
-                "registry and its newly observed history; do not repeat old history. Return JSON "
+                "substrings. supports_claim is only your uncertain assessment, not a verified "
+                "logical fact: use null when unsure, and never mark a question, congratulations, "
+                "neutral observation, or unrelated statement as support. Cite direct outcome "
+                "statements only in outcome_evidence; keep questions, opinions, and explanations "
+                "in evidence or reason evidence. Include metadata only as present in source messages. "
+                "Do not return history entries; the extractor records history only for outcome "
+                "messages it can identify directly. Include every proposal that should be in the "
+                "registry. Return JSON "
                 "only following this shape: {}. Chunk {} of {}.\n\nREGISTRY:\n{}\n\nNEW MESSAGES:\n{}".format(
                     json.dumps(schema, ensure_ascii=False), number, total,
                     json.dumps(list(registry.values()), ensure_ascii=False),
                     json.dumps(discussion, ensure_ascii=False)) )
 
     @staticmethod
-    def _evidence(records, chunk):
+    def _evidence(records, chunk, include_support_assessment=False):
         messages = {m.message_id: m for m in chunk}
         result = []
         for entry in records or []:
@@ -91,7 +101,9 @@ class DecisionExtractor:
                 author=message.author if message else None,
                 timestamp=message.timestamp if message else None,
                 source_url=message.source_url if message else None,
-                supports_claim=entry.get("supports_claim") if isinstance(entry.get("supports_claim"), bool) else None,
+                supports_claim=normalize_support_assessment(
+                    str(entry.get("quote", "")),
+                    entry.get("supports_claim") if include_support_assessment else None),
             ))
         return result
 
@@ -124,32 +136,56 @@ class DecisionExtractor:
                     previous = Alternative(**registry[identity])
                     status = item.get("status", previous.status)
                     basis = item.get("outcome_basis", previous.outcome_basis)
-                    evidence = self._evidence(item.get("outcome_evidence", item.get("evidence", [])), chunk)
+                    outcome_items = item.get("outcome_evidence")
+                    if outcome_items is None:
+                        # Older responses used `evidence` for both outcome and discussion quotes.
+                        outcome_items = item.get("evidence", [])
                     reason_items = item.get("rejection_reasons")
                     if reason_items is None and item.get("reason"):
                         reason_items = [{"text": item["reason"], "evidence": item.get("reason_evidence", [])}]
+                    evidence = self._evidence(item.get("evidence", []), chunk)
+                    proposed_outcomes = self._evidence(outcome_items or [], chunk, include_support_assessment=True)
+                    reason_evidence = []
+                    for reason_item in reason_items or []:
+                        if isinstance(reason_item, dict):
+                            reason_evidence.extend(self._evidence(
+                                reason_item.get("evidence", []), chunk, include_support_assessment=True))
+                    evidence.extend(e for e in proposed_outcomes if e not in evidence)
+                    evidence.extend(e for e in reason_evidence if e not in evidence)
+                    for candidate in proposed_outcomes:
+                        if not self._is_project_outcome(candidate.quote, status, basis):
+                            candidate.supports_claim = None
                     new_reasons = [RejectionReason(
-                        text=str(r.get("text", "")), evidence=self._evidence(r.get("evidence", []), chunk))
+                        text=str(r.get("text", "")), evidence=self._evidence(
+                            r.get("evidence", []), chunk, include_support_assessment=True))
                         for r in (reason_items or []) if isinstance(r, dict) and r.get("text")]
-                    history = list(previous.history)
-                    new_history = item.get("history", [])
-                    if not new_history and (evidence or status != previous.status or basis != previous.outcome_basis):
-                        new_history = [{"segment_id": evidence[0].segment_id if evidence else None,
-                                        "status": status, "outcome_basis": basis}]
-                    history.extend(h for h in new_history if h not in history)
                     merged_evidence = list(previous.evidence)
                     merged_outcome = list(previous.outcome_evidence)
                     for candidate in evidence:
                         if candidate not in merged_evidence:
                             merged_evidence.append(candidate)
-                        if candidate not in merged_outcome:
-                            merged_outcome.append(candidate)
-                    # Keep a model assertion of an outcome separate from its quote provenance.
-                    if status in ("accepted", "rejected") and not merged_outcome and evidence:
-                        status, basis = "unresolved", "unknown"
-                    if (status in ("accepted", "rejected") and
-                            any(e.supports_claim is False for e in evidence)):
-                        status, basis = "unresolved", "unknown"
+                    event_evidence = [e for e in proposed_outcomes
+                                      if self._is_project_outcome(e.quote, status, basis)
+                                      and e.supports_claim is not False]
+                    # Only source text that states a project-level outcome can update state
+                    # or create history. Questions and rationale remain general evidence.
+                    if event_evidence:
+                        for candidate in event_evidence:
+                            if candidate not in merged_outcome:
+                                merged_outcome.append(candidate)
+                        for candidate in event_evidence:
+                            event = {"segment_id": candidate.segment_id,
+                                     "status": status, "outcome_basis": basis}
+                            if event not in previous.history:
+                                previous.history.append(event)
+                    elif basis == "individual_opinion":
+                        if previous.status in ("accepted", "rejected"):
+                            status, basis = previous.status, previous.outcome_basis
+                        else:
+                            status = "unresolved"
+                    else:
+                        status = previous.status if previous.status in ("accepted", "rejected") else "unresolved"
+                        basis = previous.outcome_basis if previous.status in ("accepted", "rejected") else "unresolved"
                     merged_reasons = list(previous.rejection_reasons)
                     for reason in new_reasons:
                         found = next((r for r in merged_reasons if r.text == reason.text), None)
@@ -165,10 +201,37 @@ class DecisionExtractor:
                         reason="; ".join(r.text for r in merged_reasons) or None,
                         outcome_basis=basis, evidence=merged_evidence,
                         outcome_evidence=merged_outcome, rejection_reasons=merged_reasons,
-                        history=history,
+                        history=previous.history,
                     )
                 except (ValidationError, TypeError, AttributeError) as exc:
                     raise RuntimeError("Model returned an invalid decision: {}".format(exc)) from exc
                 registry[identity] = current.model_dump()
 
         return verify_evidence([Alternative(**item) for item in registry.values()], messages)
+
+    @staticmethod
+    def _is_project_outcome(quote: str, status: str, basis: str) -> bool:
+        """Conservative lexical gate; it is not semantic verification."""
+        text = quote.lower().strip()
+        if not text or "?" in text:
+            return False
+        if any(word in text for word in ("congratulations", "congrats", "hooray", "well done")):
+            return False
+        if re.search(r"\b(?:should|could|might|recommend|suggest)\b.{0,60}\b(?:reject|decline|not accept)\b", text):
+            return False
+
+        if status == "accepted" and basis == "explicit_acceptance":
+            return bool(re.search(
+                r"\b(?:we|the team|the project|the council|the steering council)\b.{0,80}\b(?:accept(?:s|ed|ing)?|approv(?:e|es|ed)|adopt(?:s|ed)?|decid(?:e|es|ed) to)\b|"
+                r"\b(?:is|has been|was) accepted\b|\bhereby accepting\b", text))
+        if status == "rejected" and basis == "explicit_rejection":
+            return bool(re.search(
+                r"\b(?:we|the team|the project|the council|the steering council)\b.{0,80}\b(?:reject(?:s|ed|ing)?|declin(?:e|es|ed)|decid(?:e|es|ed) against|decid(?:e|es|ed) to reject|will not accept|do not accept)\b|"
+                r"\b(?:is|has been|was) rejected\b|\b(?:the )?(?:proposal|feature|pep)\b.{0,60}\b(?:was|has been|is) rejected\b", text))
+        if basis == "consensus" and status in ("accepted", "rejected"):
+            if re.search(r"\b(?:no|lack of|without)\s+(?:a\s+)?consensus\b|\bconsensus\b.{0,30}\b(?:not|never|hasn't|isn't)\b", text):
+                return False
+            return bool(re.search(
+                r"\bconsensus\s+(?:was|has been|is)\s+reached\b|"
+                r"\b(?:we all agree|the team agreed|everyone agreed)\b", text))
+        return False

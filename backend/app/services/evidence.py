@@ -3,6 +3,19 @@ from typing import List
 from app.core.schemas import Alternative, DiscussionMessage, Evidence
 
 
+def normalize_support_assessment(quote: str, assessment):
+    """Keep model support unknown for clear questions and social reactions."""
+    text = quote.strip().lower()
+    if "?" in text or text.startswith((
+            "why ", "what ", "how ", "when ", "where ", "who ", "which ",
+            "can ", "could ", "would ", "should ", "do ", "does ", "did ",
+            "is ", "are ", "was ", "were ")):
+        return None
+    if any(marker in text for marker in ("congratulations", "congrats", "hooray", "well done")):
+        return None
+    return assessment if isinstance(assessment, bool) else None
+
+
 def _verify(items, message_map):
     verified = []
     for evidence in items:
@@ -19,7 +32,7 @@ def _verify(items, message_map):
             source_url=original.source_url,
             quote_verified=True,
             # Presence proves provenance only; entailment remains model-proposed.
-            supports_claim=evidence.supports_claim,
+            supports_claim=normalize_support_assessment(quote, evidence.supports_claim),
         ))
     return verified
 

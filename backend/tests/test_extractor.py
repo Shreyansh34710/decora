@@ -35,14 +35,16 @@ def test_model_response_is_parsed_and_evidence_verified():
     provider = MockProvider([response([{
         "proposal": "Use PostgreSQL", "status": "accepted",
         "reason": None, "outcome_basis": "explicit_acceptance",
-        "evidence": [{"segment_id": "message_1",
-                      "quote": "I agree: use PostgreSQL"}],
+        "outcome_evidence": [{"segment_id": "message_1",
+                               "quote": "The team accepts PostgreSQL", "supports_claim": True}],
     }])])
     decisions = DecisionExtractor(provider).extract(
-        [msg(1, "I agree: use PostgreSQL")])
+        [msg(1, "The team accepts PostgreSQL")])
     assert len(decisions) == 1
     assert decisions[0].verified is True
     assert decisions[0].decision_id.startswith("proposal_")
+    assert decisions[0].status == "accepted"
+    assert len(decisions[0].history) == 1
 
 
 @pytest.mark.parametrize("raw, error", [
@@ -64,12 +66,12 @@ def test_later_chunk_updates_existing_proposal_and_accumulates_evidence():
     second = [{
         "proposal": "MongoDB", "status": "rejected",
         "reason": "relational consistency", "outcome_basis": "explicit_rejection",
-        "evidence": [{"segment_id": "message_2", "quote": "reject MongoDB for relational consistency"}],
+        "outcome_evidence": [{"segment_id": "message_2", "quote": "We reject MongoDB for relational consistency"}],
     }]
     provider = MockProvider([response(first), response(second)])
     decisions = DecisionExtractor(provider, chunk_size=1).extract([
         msg(1, "I propose MongoDB"),
-        msg(2, "We should reject MongoDB for relational consistency"),
+        msg(2, "We reject MongoDB for relational consistency"),
     ])
     assert len(decisions) == 1
     assert decisions[0].status == "rejected"
@@ -82,9 +84,10 @@ def test_duplicate_proposal_is_updated_not_duplicated():
         {"proposal": "Use PostgreSQL", "status": "unresolved",
          "outcome_basis": "unresolved", "evidence": []},
         {"proposal": "Use PostgreSQL", "status": "accepted",
-         "outcome_basis": "explicit_acceptance", "evidence": []},
+         "outcome_basis": "explicit_acceptance",
+         "outcome_evidence": [{"segment_id": "message_1", "quote": "We accept PostgreSQL", "supports_claim": True}]},
     ])])
-    decisions = DecisionExtractor(provider).extract([msg(1, "PostgreSQL")])
+    decisions = DecisionExtractor(provider).extract([msg(1, "We accept PostgreSQL")])
     assert len(decisions) == 1
     assert decisions[0].status == "accepted"
 
@@ -104,19 +107,19 @@ def test_invalid_evidence_is_removed_and_unresolved_kept():
 def test_same_proposal_reworded_across_chunks_keeps_stable_identity_and_history():
     provider = MockProvider([
         response([{"proposal": "Use PostgreSQL for storage", "status": "unresolved",
-                   "outcome_basis": "unresolved", "outcome_evidence": [
-                       {"segment_id": "message_1", "quote": "I propose PostgreSQL", "supports_claim": True}]}]),
+                   "outcome_basis": "unresolved", "evidence": [
+                       {"segment_id": "message_1", "quote": "I propose PostgreSQL", "supports_claim": None}]}]),
         response([{"proposal_id": "proposal_0001", "proposal": "Adopt PostgreSQL as the database",
                    "status": "accepted", "outcome_basis": "consensus", "outcome_evidence": [
-                       {"segment_id": "message_2", "quote": "Agreed, PostgreSQL is our database", "supports_claim": True}]}]),
+                       {"segment_id": "message_2", "quote": "The team agreed PostgreSQL is our database", "supports_claim": True}]}]),
     ])
     result = DecisionExtractor(provider, chunk_size=1).extract([
-        msg(1, "I propose PostgreSQL"), msg(2, "Agreed, PostgreSQL is our database")])
+        msg(1, "I propose PostgreSQL"), msg(2, "The team agreed PostgreSQL is our database")])
     assert len(result) == 1
     assert result[0].decision_id == "proposal_0001"
     assert result[0].status == "accepted"
-    assert [e.segment_id for e in result[0].outcome_evidence] == ["message_1", "message_2"]
-    assert len(result[0].history) == 2
+    assert [e.segment_id for e in result[0].outcome_evidence] == ["message_2"]
+    assert len(result[0].history) == 1
 
 
 def test_similar_but_distinct_proposals_remain_separate():
@@ -143,6 +146,106 @@ def test_individual_objection_does_not_override_later_project_acceptance():
         msg(1, "I propose Redis"), msg(2, "I object to Redis"), msg(3, "The team approves Redis")])
     assert result[0].status == "accepted"
     assert result[0].outcome_basis == "explicit_acceptance"
+
+
+def test_question_quote_is_preserved_but_not_counted_as_logical_outcome_support():
+    question = "Why does this not allow assignment to attributes and subscripts?"
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Allow assignment to attributes and subscripts",
+        "status": "rejected", "outcome_basis": "explicit_rejection",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": question, "supports_claim": True}],
+    }])])).extract([msg(1, question, author="Random832")])
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].outcome_evidence == []
+    assert result[0].evidence[0].quote == question
+    assert result[0].evidence[0].supports_claim is None
+
+
+def test_individual_objection_is_not_a_project_rejection():
+    objection = "I oppose using Redis for this service."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use Redis", "status": "rejected", "outcome_basis": "individual_opinion",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": objection, "supports_claim": True}],
+    }])])).extract([msg(1, objection, author="One maintainer")])
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "individual_opinion"
+    assert result[0].history == []
+
+
+def test_individual_objection_does_not_overwrite_existing_project_acceptance():
+    provider = MockProvider([
+        response([{"proposal": "Use Redis", "status": "accepted",
+                   "outcome_basis": "explicit_acceptance", "outcome_evidence": [
+                       {"segment_id": "message_1", "quote": "The team accepts Redis", "supports_claim": True}]}]),
+        response([{"proposal_id": "proposal_0001", "proposal": "Use Redis", "status": "rejected",
+                   "outcome_basis": "individual_opinion", "outcome_evidence": [
+                       {"segment_id": "message_2", "quote": "I oppose Redis", "supports_claim": True}]}]),
+    ])
+    result = DecisionExtractor(provider, chunk_size=1).extract([
+        msg(1, "The team accepts Redis"), msg(2, "I oppose Redis")])
+    assert result[0].status == "accepted"
+    assert result[0].outcome_basis == "explicit_acceptance"
+    assert len(result[0].history) == 1
+
+
+def test_multiple_objections_without_final_decision_remain_unresolved():
+    objections = [
+        {"segment_id": "message_1", "quote": "I object to using Redis", "supports_claim": True},
+        {"segment_id": "message_2", "quote": "I also oppose this approach", "supports_claim": True},
+    ]
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use Redis", "status": "rejected", "outcome_basis": "explicit_rejection",
+        "outcome_evidence": objections,
+    }])])).extract([
+        msg(1, "I object to using Redis", "A"), msg(2, "I also oppose this approach", "B")])
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].history == []
+
+
+def test_denial_of_consensus_does_not_create_project_outcome():
+    quote = "There is no consensus to reject the proposal."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use Redis", "status": "rejected", "outcome_basis": "consensus",
+        "outcome_evidence": [{"segment_id": "message_1", "quote": quote, "supports_claim": True}],
+    }])])).extract([msg(1, quote)])
+    assert result[0].status == "unresolved"
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].history == []
+
+
+def test_congratulations_do_not_create_decision_history_events():
+    provider = MockProvider([
+        response([{"proposal": "Use PostgreSQL", "status": "accepted",
+                   "outcome_basis": "explicit_acceptance", "outcome_evidence": [
+                       {"segment_id": "message_1", "quote": "The team accepts PostgreSQL", "supports_claim": True}]}]),
+        response([{"proposal_id": "proposal_0001", "proposal": "Use PostgreSQL",
+                   "status": "accepted", "outcome_basis": "explicit_acceptance",
+                   "outcome_evidence": [{"segment_id": "message_2", "quote": "Congratulations, well done", "supports_claim": True}],
+                   "history": [{"segment_id": "message_2", "status": "accepted", "outcome_basis": "explicit_acceptance"}]}]),
+    ])
+    result = DecisionExtractor(provider, chunk_size=1).extract([
+        msg(1, "The team accepts PostgreSQL"), msg(2, "Congratulations, well done")])
+    assert len(result[0].history) == 1
+    assert result[0].history[0]["segment_id"] == "message_1"
+    assert any(e.quote == "Congratulations, well done" for e in result[0].evidence)
+
+
+def test_outcome_changing_message_creates_a_decision_history_event():
+    provider = MockProvider([
+        response([{"proposal": "Use Redis", "status": "unresolved", "outcome_basis": "unresolved"}]),
+        response([{"proposal_id": "proposal_0001", "proposal": "Use Redis",
+                   "status": "rejected", "outcome_basis": "explicit_rejection",
+                   "outcome_evidence": [{"segment_id": "message_2",
+                                         "quote": "The team has decided to reject Redis", "supports_claim": True}]}]),
+    ])
+    result = DecisionExtractor(provider, chunk_size=1).extract([
+        msg(1, "We are considering Redis"), msg(2, "The team has decided to reject Redis")])
+    assert result[0].status == "rejected"
+    assert len(result[0].history) == 1
+    assert result[0].history[0] == {
+        "segment_id": "message_2", "status": "rejected", "outcome_basis": "explicit_rejection"}
 
 
 def test_rejection_reasons_are_multiple_and_independently_verified():
@@ -173,8 +276,9 @@ def test_conflicting_opinions_and_unsupported_outcome_claim_stay_unresolved():
         "outcome_evidence": [{"segment_id": "message_1", "quote": "I prefer Cassandra", "supports_claim": False}],
     }])])).extract([msg(1, "I prefer Cassandra, but others disagree")])
     assert result[0].status == "unresolved"
-    assert result[0].outcome_basis == "unknown"
-    assert result[0].outcome_evidence[0].supports_claim is False
+    assert result[0].outcome_basis == "unresolved"
+    assert result[0].outcome_evidence == []
+    assert result[0].evidence[0].supports_claim is None
 
 
 def test_missing_author_timestamp_and_quote_presence_are_separate_from_support():
@@ -183,10 +287,21 @@ def test_missing_author_timestamp_and_quote_presence_are_separate_from_support()
         "proposal": "Use PostgreSQL", "status": "accepted", "outcome_basis": "explicit_acceptance",
         "outcome_evidence": [{"segment_id": "message_1", "quote": "The team accepts PostgreSQL", "supports_claim": False}],
     }])])).extract([source])
-    evidence = result[0].outcome_evidence[0]
+    evidence = result[0].evidence[0]
     assert evidence.quote_verified is True
     assert evidence.supports_claim is False
     assert evidence.author is None and evidence.timestamp is None
+
+
+def test_neutral_discussion_quote_has_unknown_support_assessment():
+    text = "The syntax uses two colons."
+    result = DecisionExtractor(MockProvider([response([{
+        "proposal": "Use colon-based range syntax", "status": "unresolved",
+        "outcome_basis": "unknown", "evidence": [
+            {"segment_id": "message_1", "quote": text, "supports_claim": True}],
+    }])])).extract([msg(1, text)])
+    assert result[0].evidence[0].quote_verified is True
+    assert result[0].evidence[0].supports_claim is None
 
 
 def test_chunker_preserves_chronological_order():
