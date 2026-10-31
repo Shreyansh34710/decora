@@ -1,0 +1,57 @@
+{
+  "discussion_title": "Synthetic database discussion",
+  "model": "qwen3:8b",
+  "decisions": [
+    {
+      "decision_id": "proposal_i_propose_using_mongodb_for_our_application",
+      "proposal": "I propose using MongoDB for our application.",
+      "status": "rejected",
+      "reason": "We should reject MongoDB for this project because our data relationships require relational consistency.",
+      "outcome_basis": "explicit_rejection",
+      "evidence": [
+        {
+          "segment_id": "message_1",
+          "quote": "I propose using MongoDB for our application.",
+          "author": "Alice",
+          "timestamp": null,
+          "source_url": null
+        },
+        {
+          "segment_id": "message_5",
+          "quote": "We should reject MongoDB for this project because our data relationships require relational consistency.",
+          "author": "Bob",
+          "timestamp": null,
+          "source_url": null
+        }
+      ],
+      "verified": true
+    },
+    {
+      "decision_id": "proposal_postgresql_would_be_a_better_choice_for_maintaining_relational_consistency",
+      "proposal": "PostgreSQL would be a better choice for maintaining relational consistency.",
+      "status": "accepted",
+      "reason": null,
+      "outcome_basis": "explicit_acceptance",
+      "evidence": [
+        {
+          "segment_id": "message_3",
+          "quote": "PostgreSQL would be a better choice for maintaining relational consistency.",
+          "author": "Charlie",
+          "timestamp": null,
+          "source_url": null
+        },
+        {
+          "segment_id": "message_4",
+          "quote": "After considering the discussion, I agree that PostgreSQL is the better option.",
+          "author": "Alice",
+          "timestamp": null,
+          "source_url": null
+        }
+      ],
+      "verified": true
+    }
+  ],
+  "total_messages": 5,
+  "verified_decisions": 2,
+  "unverified_decisions": 0
+}
